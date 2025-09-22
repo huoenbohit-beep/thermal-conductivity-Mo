@@ -1,0 +1,60 @@
+# ------------------------------------
+# Mason PRM style Mo structure thermal relaxation script (600K)
+# Input: Mo-eam-cdpa0.0691.data
+# Output: Mo_600K_cdpa0.0691.lammpstrj
+# Potential: Mo EAM potential (mo.fs.eam.alloy)
+# ------------------------------------
+
+units           metal
+boundary        p p p
+dimension       3
+atom_style      atomic
+atom_modify     map array
+atom_modify     sort 0 0.0
+
+# Read structure
+read_data       Mo-eam-cdpa0.0691.data
+
+# Mo atomic mass
+mass            1 95.96
+
+# Force atom ID to be continuous
+reset_atoms     id sort yes
+
+# Potential setup
+pair_style      eam/fs
+pair_coeff      * * mo.fs.eam.alloy Mo
+
+# Neighbor list
+neighbor        0.2 bin
+neigh_modify    delay 5 every 1 check yes
+
+# Timestep & thermo output
+timestep        0.001
+thermo          100
+thermo_style    custom step temp press pe ke etotal
+
+# Initialize velocity at 600K
+velocity        all create 600 12345 mom yes rot yes dist gaussian
+
+# ---------------------------
+# Step 1: Energy minimization
+# ---------------------------
+min_style       cg
+minimize        1e-10 1e-10 5000 5000
+
+# ---------------------------
+# Step 2: Thermal relaxation (NPT, release z only)
+# ---------------------------
+fix             thermal all npt temp 600 600 0.2 z 0 0 1.0
+run             20000
+unfix           thermal
+
+# ---------------------------
+# Step 3: Output per-atom potential energy (for OVITO)
+# ---------------------------
+compute         peratom all pe/atom
+dump            final all custom 1 Mo_600K_cdpa0.0691.lammpstrj id type x y z c_peratom
+dump_modify     final sort id
+run             0
+undump          final

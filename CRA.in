@@ -1,0 +1,110 @@
+# ------------------------------------
+# 初始化设置
+# ------------------------------------
+units metal
+atom_style atomic
+boundary p p p
+dimension 3
+variable a equal 3.1472
+
+# 模拟盒子参数
+variable X equal 64
+variable Y equal 64
+variable Z equal 200
+
+lattice bcc ${a}
+region box block 0 ${X} 0 ${Y} 0 ${Z}
+create_box 1 box
+create_atoms 1 box
+
+# 设置质量 & 打乱 ID
+mass 1 95.96
+reset_atoms id sort no
+
+# 势函数（EAM/FS）
+pair_style eam/fs
+pair_coeff * * mo.fs.eam.alloy Mo
+
+# 时间步与热力学输出
+timestep 0.001
+thermo 100
+
+# Dump 输出
+dump 1 all custom 10000 dump.lammpstrj id type x y z
+dump_modify 1 sort id
+
+# 插位控制参数
+variable target_cDPA equal 2
+variable N_FI equal 0
+variable N equal count(all)
+variable batch_size equal 1024
+
+# 模拟盒实际尺寸
+variable lx equal ${X}*${a}
+variable ly equal ${Y}*${a}
+variable lz equal ${Z}*${a}
+
+# 初始 group 定义
+group target_atom type 1
+group insert_test type 1   # ? 初始化 insert_test，防止 clear 报错
+
+# ------------------------------------
+# Frenkel 插位主循环
+# ------------------------------------
+label outer_loop
+variable j loop 100000
+
+variable phi equal ${N_FI}/${N}
+if "${phi} >= ${target_cDPA}" then "jump SELF break"
+
+label inner_loop
+variable i loop ${batch_size}
+
+# 删除一个原子（近似空间随机）
+variable rand_index equal floor(random(1,${N},1234+${i}+${j}*17))
+group target_atom clear
+group target_atom id ${rand_index}
+delete_atoms group target_atom compress no
+
+# 插位尝试（最多尝试1万次）
+variable attempt loop 10000
+label insert_loop
+
+group insert_test clear   # ? 每次插位判断前先清空组
+
+# 随机插位坐标（空间均匀）
+variable randx equal random(0,${lx},2345+${i}*3+${j}*7+${attempt}*2)
+variable randy equal random(0,${ly},3456+${i}*4+${j}*11+${attempt}*3)
+variable randz equal random(0,${lz},4567+${i}*5+${j}*13+${attempt}*5)
+
+# 定义 region 并生成 insert group
+variable rname string insert_region_${j}_${i}_${attempt}
+region ${rname} sphere ${randx} ${randy} ${randz} 1.0 units box
+group insert_test region ${rname}
+
+# 判断该位置是否可插
+variable insert_ok equal count(insert_test)
+
+# 插入 or 再试
+if "${insert_ok} == 0" then "create_atoms 1 single ${randx} ${randy} ${randz} units box"
+if "${insert_ok} == 0" then "jump SELF inserted"
+
+next attempt
+jump SELF insert_loop
+
+label inserted
+next i
+jump SELF inner_loop
+
+# 每批插位后结构最小化
+minimize 1.0e-8 1.0e-8 1000 10000
+
+# 更新已插入对数
+variable N_FI equal ${N_FI}+${batch_size}
+next j
+jump SELF outer_loop
+
+label break
+
+# 输出最终结构
+write_data relaxed_structure.data
